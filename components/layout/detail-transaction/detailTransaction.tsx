@@ -1,156 +1,418 @@
-"use client"
+"use client";
 
 import { useState } from "react"
+import axios, { AxiosError } from "axios"
 import Image from "next/image"
-import { ShoppingBag } from "lucide-react"
+import Link from "next/link"
+import { ShoppingBag, Loader2 } from "lucide-react"
+import { useAuth } from "@/hooks/auth/useAuth"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { formatCurrency } from "@/lib/utils"
-import Link from "next/link"
-import TextedCheckbox from "@/components/fragments/TextedCheckbox"
-import Star from "@/public/star.svg"
-import { useAuth } from "@/hooks/auth/useAuth"
+import { transactionBaseUrl, reviewBaseUrl, trackingBaseUrl, checkoutBaseUrl } from "@/types/globalVar"
+import { useRouter } from "next/navigation"
+import { toast } from "sonner"
+import { ReviewDialog } from "@/components/layout/detail-transaction/reviewDialog"
+import { BuyProductDialog } from "@/components/layout/detail-transaction/buyDialog"
+import { usePathname } from "next/navigation";
 
-interface Shop {
-  id: string
-  name: string
+interface TransactionResponse {
+  transaction_detail: {
+    reference_number: string;
+    status: string;
+    transaction_date: string;
+    shipping_address: string;
+    shipping_partner: string;
+    shipping_code: string | null;
+    return_code: string;
+  };
+  product_details: Array<{
+    order_id: string;
+    product_id: string;
+    product_name: string;
+    image: string;
+    start_rent_date: string;
+    end_rent_date: string;
+    quantity: number;
+    price: number;
+    sub_total: number;
+    deposit: number;
+  }>;
+  payment_detail: {
+    payment_method: string;
+    sub_total: number;
+    shipping_price: number;
+    service_fee: number;
+    total_deposit: number;
+    grand_total: number;
+  };
+  shop_detail: {
+    id: string;
+    name: string;
+  };
 }
 
-interface ProductDetail {
-  order_id: string
-  product_id: string
+interface TransactionDetailContentProps {
+  transactionData: TransactionResponse;
+  role: "customer" | "seller";
+  reFetchData: () => void;
+}
+
+interface CheckPaymentAmountResponse {
   product_name: string
-  image: string
-  start_rent_date: string
-  end_rent_date: string
-  quantity: number
-  price: number
-  sub_total: number
-  deposit: number
-  shop: Shop | null
+  amount_to_pay: number
 }
 
-interface TransactionDetailData {
-  reference_number: string
-  status: string
-  transaction_date: string
-  shipping_address: string
-  shipping_partner: string
-  shipping_code: string | null
-}
+const api = axios.create({ baseURL: transactionBaseUrl })
+const reviewApi = axios.create({ baseURL: reviewBaseUrl })
+const checkoutApi = axios.create({ baseURL: checkoutBaseUrl })
 
-interface PaymentDetail {
-  payment_method: string
-  sub_total: number
-  shipping_price: number
-  service_fee: number
-  total_deposit: number
-  grand_total: number
-}
+type PaymentPayload = {
+  reference_numbers: string[];
+  payment_method: string;
+  customer_id: string;
+  amount: number;
+};
+type ShippingPayload = { reference_number: string; shipping_code: string };
+type ReturnPayload = { reference_number: string; return_code: string };
+type BasicPayload = { reference_number: string };
+type DonePayload = { reference_number: string; customer_id: string };
+type CancelPayload = { reference_number: string };
 
-interface TransactionData {
-  transaction_detail: TransactionDetailData
-  product_details: ProductDetail[]
-  payment_detail: PaymentDetail
-  shop_detail: Shop
-}
+const handleApiCall = async (request: Promise<any>) => {
+  const response = await request;
+  if (response.data?.error_schema?.error_code !== "PS-00-000") {
+    throw new Error(
+      response.data?.error_schema?.error_message ||
+        "Terjadi kesalahan pada server."
+    );
+  }
+  return response.data;
+};
 
-type TransactionDetailContentProps = {
-  transactionData: TransactionData
-  role: "customer" | "seller"
-}
+const apiService = {
+  payment: (payload: PaymentPayload) =>
+    handleApiCall(api.patch("/transaction-detail/payment", payload)),
+  ship: (payload: ShippingPayload) =>
+    handleApiCall(api.patch("/transaction-detail/set-shipping", payload)),
+  receive: (payload: BasicPayload) =>
+    handleApiCall(api.patch("/transaction-detail/receive-item", payload)),
+  return: (payload: ReturnPayload) =>
+    handleApiCall(api.patch("/transaction-detail/return-item", payload)),
+  done: (payload: DonePayload) =>
+    handleApiCall(api.patch("/transaction-detail/done", payload)),
+  cancel: (payload: CancelPayload) =>
+    handleApiCall(api.patch("/transaction-detail/cancelled", payload)),
 
-export const TransactionDetailContent = ({ transactionData, role }: TransactionDetailContentProps) => {
-  const [showReturnForm, setShowReturnForm] = useState<boolean>(false)
-  const [showRentToBuyForm, setShowRentToBuyForm] = useState<boolean>(false)
-  const [resiBuying, setResiBuying] = useState<string>("")
-  const [nominalAmount, setNominalAmount] = useState<string>("")
-  const [showRatingForm, setShowRatingForm] = useState<boolean>(false)
-  const shopId = typeof window !== "undefined" ? localStorage.getItem("shopId") : null
-  const { transaction_detail, product_details, payment_detail, shop_detail } = transactionData
-  const status = transaction_detail.status
+  track: (
+    refNum: string,
+    idPayload: { customer_id?: string; shop_id?: string }
+  ) => {
+    console.log(
+      "TODO: Implement tracking API call",
+      `${trackingBaseUrl}/lacak-produk/${refNum}`,
+      idPayload
+    );
+    return Promise.resolve();
+  },
+  checkPaymentAmount: (payload: { customer_id: string; product_id: string; reference_number: string; transaction_id: string }) => handleApiCall(checkoutApi.post("/check-payment-amount", payload)),
 
-  const isUnpaid = status === "Belum Dibayar"
-  const isProcessed = status === "Diproses" || status === "Dikirim"
-  const isRented = status === "Sedang Disewa"
-  const isFinished = status === "Selesai"
+  buyProduct: (payload: { customer_id: string; product_id: string; reference_number: string; transaction_id: string; amount_payment: number; payment_method: string }) => handleApiCall(checkoutApi.post("/buy-product", payload)),
+
+  addReview: (payload: FormData) => {
+    return handleApiCall(
+      reviewApi.post("/add", payload, {
+        headers: {
+          "Content-Type": "multipart/form-data",
+        },
+      })
+    );
+  },
+};
+
+export function TransactionDetailContent({
+  transactionData,
+  role,
+  reFetchData,
+}: TransactionDetailContentProps) {
+  const { customerId } = useAuth();
+  const router = useRouter();
+  const pathname = usePathname();
+  const isTransactionHistory = pathname.includes("transaction-history");
+  const shopId =
+    typeof window !== "undefined" ? localStorage.getItem("shopId") : null;
+
+  const [loadingAction, setLoadingAction] = useState<boolean>(false);
+  const [showReturnForm, setShowReturnForm] = useState<boolean>(false);
+  const [showShippingForm, setShowShippingForm] = useState<boolean>(false);
+  const [isReviewDialogOpen, setReviewDialogOpen] = useState<boolean>(false);
+
+  const [returnCode, setReturnCode] = useState<string>("")
+  const [shippingCode, setShippingCode] = useState<string>("")
+  const [isBuyProductDialogOpen, setBuyProductDialogOpen] = useState<boolean>(false)
+  const [buyProductInfo, setBuyProductInfo] = useState<CheckPaymentAmountResponse | null>(null)
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<string>("")
+
+  const { transaction_detail, product_details, payment_detail, shop_detail } =
+    transactionData;
+  const status = transaction_detail.status;
+  const refNum = transaction_detail.reference_number;
+
+  const performAction = async (
+    action: Promise<any>,
+    successMessage: string
+  ) => {
+    setLoadingAction(true);
+    try {
+      await action;
+      toast(successMessage);
+      reFetchData();
+    } catch (error) {
+      const err = error as AxiosError<{
+        error_schema: { error_message: string };
+      }>;
+      const errorMessage =
+        err.response?.data?.error_schema?.error_message ||
+        "Gagal melakukan aksi.";
+      toast(errorMessage);
+    } finally {
+      setLoadingAction(false);
+      setReviewDialogOpen(false);
+      setShowReturnForm(false);
+      setShowShippingForm(false);
+    }
+  };
 
   const handlePayment = () => {
-    localStorage.setItem("paymentAmount", payment_detail.grand_total.toString())
-    localStorage.setItem("paymentMethod", payment_detail.payment_method)
-    window.location.href = `/payment`
-  }
+    if (!customerId) return;
+    const payload: PaymentPayload = {
+      reference_numbers: [refNum],
+      payment_method: payment_detail.payment_method,
+      customer_id: customerId,
+      amount: payment_detail.grand_total,
+    };
+    performAction(
+      apiService.payment(payload),
+      "Pembayaran berhasil, transaksi sedang diproses."
+    );
+  };
+
+  const handleReceiveItem = () => {
+    performAction(
+      apiService.receive({ reference_number: refNum }),
+      "Konfirmasi penerimaan barang berhasil."
+    );
+  };
+
+  const handleReturnItem = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!returnCode) return;
+    const payload = { reference_number: refNum, return_code: returnCode };
+    performAction(
+      apiService.return(payload),
+      "Formulir pengembalian telah dikirim."
+    );
+  };
+
+  const handleShipItem = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!shippingCode) return;
+    const payload = { reference_number: refNum, shipping_code: shippingCode };
+    performAction(
+      apiService.ship(payload),
+      "Status transaksi berhasil diubah menjadi 'Dikirim'."
+    );
+  };
+
+  const handleCancelTransaction = () => {
+    const payload = { reference_number: refNum };
+    performAction(apiService.cancel(payload), "Transaksi telah dibatalkan.");
+  };
+
+  const handleDoneTransaction = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!customerId) {
+      toast("Customer ID tidak ditemukan untuk transaksi ini.");
+      return;
+    }
+    const payload = { reference_number: refNum, customer_id: customerId };
+    performAction(apiService.done(payload), "Transaksi telah selesai.");
+  };
 
   const handleTrackProduct = () => {
-    window.location.href = `/lacak-produk`
+    localStorage.setItem(
+      "seller_refference_number",
+      transactionData.transaction_detail.reference_number
+    );
+
+    if (isTransactionHistory) {
+      router.push("/dashboard-seller/transaction-history/track-order");
+    } else {
+      router.push("/order-history/lacak-produk");
+    }
+  };
+
+  const handleBuyProduct = async () => {
+    if (!customerId) {
+      toast.error("Customer ID tidak ditemukan, silakan login ulang.")
+      return
+    }
+
+    setLoadingAction(true)
+    try {
+      const payload = {
+        customer_id: customerId,
+        product_id: product_details[0].product_id,
+        reference_number: refNum,
+        transaction_id: product_details[0].order_id,
+      }
+
+      const response = await apiService.checkPaymentAmount(payload)
+
+      console.log("ini data", response)
+      const data: CheckPaymentAmountResponse = response.output_schema
+
+      setBuyProductInfo({
+        product_name: data.product_name,
+        amount_to_pay: data.amount_to_pay,
+      })
+      setBuyProductDialogOpen(true)
+    } catch (error) {
+      const err = error as AxiosError<{ error_schema: { error_message: string } }>
+      const errorMessage = err.response?.data?.error_schema?.error_message || "Gagal mengambil detail pembelian."
+      toast.error(errorMessage)
+    } finally {
+      setLoadingAction(false)
+    }
   }
 
-  const handleReturnProduct = () => {
-    setShowReturnForm(true)
-    setShowRentToBuyForm(false)
+  const handleSubmitBuyProduct = () => {
+    if (!customerId || !buyProductInfo) return
+
+    const payload = {
+      customer_id: customerId,
+      product_id: product_details[0].product_id,
+      reference_number: refNum,
+      transaction_id: product_details[0].order_id,
+      amount_payment: buyProductInfo.amount_to_pay,
+      payment_method: selectedPaymentMethod,
+    }
+
+    performAction(apiService.buyProduct(payload), "Pembelian berhasil! Transaksi Anda akan diperbarui.").then(() => {
+      setBuyProductDialogOpen(false)
+      setBuyProductInfo(null)
+      setSelectedPaymentMethod("")
+    })
   }
 
-  const handleBuyProduct = () => {
-    setShowRentToBuyForm(true)
-    setShowReturnForm(false)
-  }
+  const handleSubmitRating = (payload: {
+    rating: number;
+    comment: string;
+    image?: File;
+  }) => {
+    if (!customerId) {
+      toast.error("Customer ID tidak ditemukan, silakan login ulang.");
+      return;
+    }
 
-  const handleShowRatingForm = () => {
-    setShowRatingForm(true)
-  }
+    const formData = new FormData();
+    formData.append("customerId", customerId);
+    formData.append("rating", payload.rating.toString());
+    formData.append("comment", payload.comment);
 
-  const handleSubmitReturn = (e: React.FormEvent) => {
-    e.preventDefault()
-    alert(`Form pengembalian dikirim dengan nomor resi: ${resiBuying}`)
-    setShowReturnForm(false)
-  }
+    product_details.forEach((product) => {
+      formData.append("productIds", product.product_id);
+    });
 
-  const handleSubmitRentToBuy = (e: React.FormEvent) => {
-    e.preventDefault()
-    alert(`Form Rent to Buy dikirim dengan nominal: ${nominalAmount}`)
-    setShowRentToBuyForm(false)
-  }
+    if (payload.image) {
+      formData.append("image", payload.image);
+    }
+
+    performAction(
+      apiService.addReview(formData),
+      "Ulasan Anda berhasil dikirim! Terima kasih."
+    );
+  };
+
+  const isCustomer = role === "customer";
+  const isSeller = role === "seller";
 
   return (
-    <div className='w-full'>
-      <Card className='mb-6'>
-        <CardContent className='pt-6'>
-          <div className='flex-col gap-4'>
-            <h1 className='text-xl font-bold pb-4 border-b-[1px] border-[#D9D9D9]'>Detail Transaksi</h1>
-            <div className='flex-col pt-6 space-y-3 '>
-              <div className='flex justify-between'>
-                <p className='text-sm text-primary'>Nomor Referensi</p>
-                <p className='font-semibold text-lg'>{transaction_detail.reference_number}</p>
+    <div className="w-full">
+      <Card className="mb-6">
+        <CardContent className="pt-6">
+          <div className="flex-col gap-4">
+            <h1 className="text-xl font-bold pb-4 border-b-[1px] border-[#D9D9D9]">
+              Detail Transaksi
+            </h1>
+            <div className="flex-col pt-6 space-y-3 ">
+              <div className="flex justify-between">
+                <p className="text-sm text-primary">Nomor Referensi</p>
+                <p className="font-semibold text-lg">
+                  {transaction_detail.reference_number}
+                </p>
               </div>
-              <div className='flex justify-between'>
-                <p className='text-sm text-primary'>Status Transaksi</p>
+              <div className="flex justify-between">
+                <p className="text-sm text-primary">Status Transaksi</p>
                 <Badge
-                  className={`p-2 ${status === "Belum Dibayar" ? " bg-[#D9D9D9] text-color-primary" : ""} ${status === "Diproses" ? "bg-[#FDCC0D] text-[#590505]" : ""} ${
-                    status === "Dikirim" ? "bg-color-third text-color-primaryDark" : ""
-                  } ${status === "Sedang Disewa" ? "bg-color-secondary text-white" : ""} ${status === "Dibatalkan" ? "bg-[#BB0909] text-white" : ""} ${status === "Dikembalikan" ? "bg-[#05593E] text-white" : ""} ${
-                    status === "Selesai" ? "bg-custom-gradient-tr text-white" : ""
+                  className={`p-2 ${
+                    status === "Belum Dibayar"
+                      ? " bg-[#D9D9D9] text-color-primary"
+                      : ""
+                  } ${
+                    status === "Diproses" ? "bg-[#FDCC0D] text-[#590505]" : ""
+                  } ${
+                    status === "Dikirim"
+                      ? "bg-color-third text-color-primaryDark"
+                      : ""
+                  } ${
+                    status === "Sedang Disewa"
+                      ? "bg-color-secondary text-white"
+                      : ""
+                  } ${
+                    status === "Dibatalkan" ? "bg-[#BB0909] text-white" : ""
+                  } ${
+                    status === "Dikembalikan" ? "bg-[#05593E] text-white" : ""
+                  } ${
+                    status === "Selesai"
+                      ? "bg-custom-gradient-tr text-white"
+                      : ""
                   }`}
                 >
                   {transaction_detail.status}
                 </Badge>
               </div>
-              <div className='flex justify-between'>
-                <p className='text-sm text-primary'>Tanggal Penyewaan</p>
-                <p className='font-medium'>{transaction_detail.transaction_date}</p>
+              <div className="flex justify-between">
+                <p className="text-sm text-primary">Tanggal Penyewaan</p>
+                <p className="font-medium">
+                  {transaction_detail.transaction_date}
+                </p>
               </div>
               {transaction_detail.shipping_address && (
-                <div className='flex justify-between'>
-                  <p className='text-sm text-primary'>Alamat Pengiriman</p>
-                  <p className='font-medium'>{transaction_detail.shipping_address}</p>
+                <div className="flex justify-between">
+                  <p className="text-sm text-primary">Alamat Pengiriman</p>
+                  <p className="font-medium">
+                    {transaction_detail.shipping_address}
+                  </p>
                 </div>
               )}
               {transaction_detail.shipping_code && (
-                <div className='flex justify-between'>
-                  <p className='text-sm text-primary'>Kode Pengiriman</p>
-                  <p className='font-medium'>{transaction_detail.shipping_code}</p>
+                <div className="flex justify-between">
+                  <p className="text-sm text-primary">Kode Pengiriman</p>
+                  <p className="font-medium">
+                    {transaction_detail.shipping_code}
+                  </p>
+                </div>
+              )}
+              {transaction_detail.return_code && (
+                <div className="flex justify-between">
+                  <p className="text-sm text-primary">Kode Pengembalian</p>
+                  <p className="font-medium">
+                    {transaction_detail.return_code}
+                  </p>
                 </div>
               )}
             </div>
@@ -158,26 +420,20 @@ export const TransactionDetailContent = ({ transactionData, role }: TransactionD
         </CardContent>
       </Card>
 
-      <Card className='mb-6'>
-        <CardHeader className=''>
-          <div className='flex border-b-[1px] border-[#D9D9D9] w-full justify-between pb-4'>
-            <h1 className='text-xl font-bold'>Detail Barang</h1>
+      <Card className="mb-6">
+        <CardHeader className="">
+          <div className="flex border-b-[1px] border-[#D9D9D9] w-full justify-between pb-4">
+            <h1 className="text-xl font-bold">Detail Barang</h1>
             {!shopId && (
-              <div className='flex space-x-2 items-center justify-between'>
+              <div className="flex space-x-2 items-center justify-between">
                 <p>{shop_detail.name}</p>
                 <Link href={`/chat`}>
-                  <Button
-                    variant='outline'
-                    size='sm'
-                  >
+                  <Button variant="outline" size="sm">
                     Chat Toko
                   </Button>
                 </Link>
                 <Link href={`/shop/${shop_detail.id}`}>
-                  <Button
-                    variant='outline'
-                    size='sm'
-                  >
+                  <Button variant="outline" size="sm">
                     Kunjungi Toko
                   </Button>
                 </Link>
@@ -187,73 +443,79 @@ export const TransactionDetailContent = ({ transactionData, role }: TransactionD
         </CardHeader>
         <CardContent>
           {product_details.map((product, index) => (
-            <div
-              key={product.order_id}
-              className='my-4'
-            >
-              <div className='flex items-start gap-4'>
-                <div className='relative w-20 h-20 rounded-md overflow-hidden bg-gray-100'>
+            <div key={product.order_id} className="my-4">
+              <div className="flex items-start gap-4">
+                <div className="relative w-20 h-20 rounded-md overflow-hidden bg-gray-100">
                   {product.image ? (
                     <Image
                       src={product.image}
                       alt={product.product_name}
                       fill
-                      className='object-cover'
+                      className="object-cover"
                     />
                   ) : (
-                    <div className='flex items-center justify-center h-full'>
-                      <ShoppingBag className='w-8 h-8 text-gray-400' />
+                    <div className="flex items-center justify-center h-full">
+                      <ShoppingBag className="w-8 h-8 text-gray-400" />
                     </div>
                   )}
                 </div>
-                <div className='flex-1'>
-                  <div className='flex justify-between'>
-                    <div className='space-y-2'>
-                      <h3 className='font-medium'>{product.product_name}</h3>
-                      <p className='text-sm text-gray-500'>
+                <div className="flex-1">
+                  <div className="flex justify-between">
+                    <div className="space-y-2">
+                      <h3 className="font-medium">{product.product_name}</h3>
+                      <p className="text-sm text-gray-500">
                         {product.start_rent_date} - {product.end_rent_date}
                       </p>
-                      <p className='text-sm text-gray-500'>
-                        {product.quantity} barang x {formatCurrency(product.price)}
+                      <p className="text-sm text-gray-500">
+                        {product.quantity} barang x{" "}
+                        {formatCurrency(product.price)}
                       </p>
                     </div>
                   </div>
                 </div>
               </div>
-              {index < product_details.length - 1 && <Separator className='my-4' />}
+              {index < product_details.length - 1 && (
+                <Separator className="my-4" />
+              )}
             </div>
           ))}
         </CardContent>
       </Card>
 
-      <Card className='mb-6'>
-        <CardHeader className='pb-2'>
-          <CardTitle className='text-xl font-bold pb-4 border-b-[1px] border-[#D9D9D9] w-full'>Rincian Pembayaran</CardTitle>
+      <Card className="mb-6">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-xl font-bold pb-4 border-b-[1px] border-[#D9D9D9] w-full">
+            Rincian Pembayaran
+          </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className='space-y-2'>
-            <div className='flex justify-between'>
-              <span className='text-gray-600'>Metode Pembayaran</span>
-              <span className='font-medium'>{payment_detail.payment_method}</span>
+          <div className="space-y-2">
+            <div className="flex justify-between">
+              <span className="text-gray-600">Metode Pembayaran</span>
+              <span className="font-medium">
+                {payment_detail.payment_method === "Pintu_Sewa_Wallet"
+  ? "Pintu Sewa Wallet"
+  : payment_detail.payment_method}
+              </span>
             </div>
-            <div className='flex justify-between'>
-              <span className='text-gray-600'>Subtotal Harga Barang</span>
+            <div className="flex justify-between">
+              <span className="text-gray-600">Subtotal Harga Barang</span>
               <span>{formatCurrency(payment_detail.sub_total)}</span>
             </div>
-            <div className='flex justify-between'>
-              <span className='text-gray-600'>Total Ongkos Kirim</span>
+            <div className="flex justify-between">
+              <span className="text-gray-600">Total Ongkos Kirim</span>
               <span>{formatCurrency(payment_detail.shipping_price)}</span>
             </div>
-            <div className='flex justify-between'>
-              <span className='text-gray-600'>Biaya Layanan</span>
+            <div className="flex justify-between">
+              <span className="text-gray-600">Biaya Layanan</span>
               <span>{formatCurrency(payment_detail.service_fee)}</span>
             </div>
-            <div className='flex justify-between'>
-              <span className='text-gray-600'>Total Deposit</span>
+            <div className="flex justify-between">
+              <span className="text-gray-600">Total Deposit</span>
               <span>{formatCurrency(payment_detail.total_deposit)}</span>
             </div>
-            <Separator className='my-2' />
-            <div className='flex justify-between font-medium'>
+            <Separator className="my-2" />
+            <div className="flex justify-between font-medium">
               <span>Total Transaksi</span>
               <span>{formatCurrency(payment_detail.grand_total)}</span>
             </div>
@@ -261,203 +523,174 @@ export const TransactionDetailContent = ({ transactionData, role }: TransactionD
         </CardContent>
       </Card>
 
-      {/* Action buttons hanya untuk customer */}
-      {role === "customer" && (
-        <div className='flex gap-4 justify-start'>
-          {isUnpaid && !showReturnForm && !showRentToBuyForm && (
-            <Button
-              onClick={handlePayment}
-              className='bg-custom-gradient-tr text-white text-lg h-18 hover:text-white hover:opacity-70'
-            >
-              Bayar
-            </Button>
-          )}
-          {isProcessed && !showReturnForm && !showRentToBuyForm && (
-            <Button
-              onClick={handleTrackProduct}
-              className='bg-custom-gradient-tr text-white text-lg h-18 hover:text-white hover:opacity-70'
-            >
-              Lacak Pengiriman
-            </Button>
-          )}
-          {isRented && !showReturnForm && !showRentToBuyForm && (
-            <>
-              <Button
-                variant='outline'
-                className='bg-custom-gradient-tr text-white text-lg h-18 hover:text-white hover:opacity-70'
-                onClick={handleReturnProduct}
-              >
-                Kembalikan Barang
-              </Button>
-              <Button
-                className='bg-white text-color-primaryDark text-lg h-18 border border-color-primaryDark hover:text-white hover:bg-color-primaryDark'
-                onClick={handleBuyProduct}
-              >
-                Beli Barang
-              </Button>
-            </>
-          )}
-          {isFinished && !showReturnForm && !showRentToBuyForm && !showRatingForm && (
-            <Button
-              onClick={handleShowRatingForm}
-              className='bg-custom-gradient-tr text-white text-lg h-18 hover:text-white hover:opacity-70'
-            >
-              Rating
-            </Button>
-          )}
+      {loadingAction && (
+        <div className="flex items-center gap-2">
+          <Loader2 className="animate-spin h-5 w-5" />
+          Memproses...
         </div>
       )}
 
-      {/* Forms hanya untuk customer */}
-      {role === "customer" && showReturnForm && (
-        <Card className='mb-6'>
-          <CardHeader>
-            <CardTitle>Formulir Pengembalian Barang</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSubmitReturn}>
-              <div className='mb-4'>
-                <label
-                  htmlFor='resi'
-                  className='block text-sm font-medium text-gray-700 mb-1'
-                >
-                  Nomor Resi
-                </label>
-                <Input
-                  id='resi'
-                  value={resiBuying}
-                  onChange={(e) => setResiBuying(e.target.value)}
-                  placeholder='Masukkan nomor resi'
-                  required
-                />
-              </div>
-              <div className='flex gap-4 justify-end'>
-                <Button
-                  type='button'
-                  variant='outline'
-                  onClick={() => setShowReturnForm(false)}
-                  className='border border-red-800 h-10 hover:text-white hover:bg-red-800'
-                >
-                  Batal
-                </Button>
-                <Button
-                  className='bg-white text-color-primaryDark text-sm h-10 border border-color-primaryDark hover:bg-color-primaryDark hover:text-white'
-                  type='submit'
-                >
-                  Submit
-                </Button>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
+      {/* === CUSTOMER VIEW === */}
+      {isCustomer && status === "Belum Dibayar" && (
+        <Button className="bg-custom-gradient-tr" onClick={handlePayment}>
+          Bayar Sekarang
+        </Button>
+      )}
+      {isCustomer && status === "Dikirim" && (
+        <div className="flex gap-2">
+          <Button className="bg-custom-gradient-tr" onClick={handleReceiveItem}>
+            Barang Diterima
+          </Button>
+          <Button
+            onClick={handleTrackProduct}
+            className="border-2 border-color-primaryDark bg-white text-color-primaryDark
+             hover:bg-slate-300 "
+          >
+            Lacak Produk
+          </Button>
+        </div>
+      )}
+      {isCustomer && status === "Sedang Disewa" && !showReturnForm && (
+        <div className="flex gap-2">
+          <Button
+            className="bg-custom-gradient-tr"
+            onClick={() => setShowReturnForm(true)}
+          >
+            Kembalikan Barang
+          </Button>
+          <Button
+            onClick={handleBuyProduct}
+            disabled={loadingAction}
+            className='border-2 border-color-primaryDark bg-white text-color-primaryDark
+                   hover:bg-slate-300 '
+          >
+            {loadingAction && !isBuyProductDialogOpen ? <Loader2 className='mr-2 h-4 w-4 animate-spin' /> : null}
+            Beli Barang
+          </Button>
+        </div>
+      )}
+      {isCustomer && status === "Selesai" && (
+        <>
+          <Button
+            className="bg-custom-circle-gradient-br"
+            onClick={() => setReviewDialogOpen(true)}
+          >
+            Beri Rating
+          </Button>
+          <ReviewDialog
+            open={isReviewDialogOpen}
+            onOpenChange={setReviewDialogOpen}
+            onSubmit={handleSubmitRating}
+            productNames={product_details.map((p) => p.product_name)}
+            isLoading={loadingAction}
+          />
+        </>
       )}
 
-      {role === "customer" && showRentToBuyForm && (
-        <Card className='mb-6'>
-          <CardHeader>
-            <CardTitle>Formulir Rent to Buy</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className='mb-4'>
-              <p className='text-sm text-gray-500 mb-2'>Rent to Buy memungkinkan Anda untuk membeli barang yang sudah pernah disewa. Nominal yang dibayarkan adalah total harga barang dikurangi total deposit Anda.</p>
-            </div>
-            <form onSubmit={handleSubmitRentToBuy}>
-              <div className='mb-4'>
-                <label className='block text-sm font-medium text-gray-700 mb-1'>Input Nominal</label>
-                <div className='flex'>
-                  <span className='inline-flex items-center px-3 rounded-l-md border border-r-0 border-gray-300 bg-gray-50 text-gray-500'>Rp</span>
-                  <Input
-                    type='text'
-                    value={nominalAmount}
-                    onChange={(e) => setNominalAmount(e.target.value)}
-                    className='rounded-l-none'
-                    placeholder='10.000.000'
-                    required
-                  />
-                </div>
-              </div>
-              <div className='flex gap-4 justify-end'>
-                <Button
-                  type='button'
-                  variant='outline'
-                  onClick={() => setShowRentToBuyForm(false)}
-                  className='border border-red-800 h-10 hover:text-white hover:bg-red-800'
-                >
-                  Batal
-                </Button>
-                <Button
-                  className='bg-white text-color-primaryDark text-sm h-10 border border-color-primaryDark hover:bg-color-primaryDark hover:text-white'
-                  type='submit'
-                >
-                  Bayar
-                </Button>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
+      {/* === SELLER VIEW === */}
+      {isSeller && status === "Diproses" && !showShippingForm && (
+        <div className="flex gap-2">
+          <Button
+            onClick={() => setShowShippingForm(true)}
+            className="bg-custom-gradient-tr"
+          >
+            Kirim Pesanan
+          </Button>
+          <Button
+            onClick={handleCancelTransaction}
+            className="border-2 border-red-600 bg-white text-red-800 outline-none hover:bg-red-600 hover:text-white"
+          >
+            Batalkan Pesanan
+          </Button>
+        </div>
+      )}
+      {isSeller && status === "Dikirim" && (
+        <Button className="bg-custom-gradient-tr" onClick={handleTrackProduct}>
+          Lacak Produk
+        </Button>
+      )}
+      {isSeller && status === "Dikembalikan" && (
+        <div className="flex-row space-x-4">
+          <Button
+            onClick={handleDoneTransaction}
+            className="bg-custom-gradient-tr"
+          >
+            Barang Diterima
+          </Button>
+
+          <Button
+            className="border-2 border-color-primaryDark bg-white text-color-primaryDark
+             hover:bg-slate-300 "
+            onClick={handleTrackProduct}
+          >
+            Lacak Produk
+          </Button>
+        </div>
       )}
 
-      {role === "customer" && showRatingForm && (
-        <Card className='mb-6'>
-          <CardHeader>
-            <CardTitle className='text-xl font-bold pb-4 border-b-[1px] border-[#D9D9D9] w-full'>Survey Kepuasaan Penyewaan</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className='space-y-4'>
-              <div className='mb-4'>
-                <label
-                  htmlFor='review'
-                  className='block text-sm font-medium text-gray-700 mb-1'
-                >
-                  Ulasan
-                </label>
-                <Input
-                  id='review'
-                  placeholder='Barang yang disewa sangat baik dan luar biasa'
-                  className='w-full'
-                />
-              </div>
-              <label
-                htmlFor='review'
-                className='block text-sm font-medium text-gray-700 mb-1'
-              >
-                Review
-              </label>
-              <div className='mx-2 space-y-4'>
-                {[5, 4, 3, 2, 1].map((rating) => (
-                  <TextedCheckbox key={rating}>
-                    <div className='flex space-x-3 items-center'>
-                      <Image
-                        width={14}
-                        height={12}
-                        src={Star}
-                        alt={`Star ${rating}`}
-                      />
-                      <p className='text-[12px] text-color-primary'>{rating}</p>
-                    </div>
-                  </TextedCheckbox>
-                ))}
-              </div>
-              <div className='flex gap-4 justify-end'>
-                <Button
-                  type='button'
-                  variant='outline'
-                  onClick={() => setShowRatingForm(false)}
-                  className='border border-red-800 h-10 hover:text-white hover:bg-red-800'
-                >
-                  Batal
-                </Button>
-                <Button
-                  className='bg-white text-color-primaryDark text-sm h-10 border border-color-primaryDark hover:bg-color-primaryDark hover:text-white'
-                  type='submit'
-                >
-                  Submit
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+      {/* === CONDITIONAL FORMS === */}
+      {isCustomer && showReturnForm && (
+        <form
+          onSubmit={handleReturnItem}
+          className="p-4 border rounded-md space-y-4"
+        >
+          <CardTitle>Formulir Pengembalian</CardTitle>
+          <Input
+            value={returnCode}
+            onChange={(e) => setReturnCode(e.target.value)}
+            placeholder="Masukkan nomor resi pengembalian"
+            required
+          />
+          <div className="flex gap-2 justify-end">
+            <Button
+              type="button"
+              className="border-2 border-red-600 bg-white text-red-800 outline-none hover:bg-red-600 hover:text-white"
+              onClick={() => setShowReturnForm(false)}
+            >
+              Batal
+            </Button>
+            <Button className="bg-custom-gradient-tr" type="submit">
+              Submit
+            </Button>
+          </div>
+        </form>
       )}
+
+      {isSeller && showShippingForm && (
+        <form
+          onSubmit={handleShipItem}
+          className="p-4 border rounded-md space-y-4"
+        >
+          <CardTitle>Formulir Pengiriman</CardTitle>
+          <Input
+            value={shippingCode}
+            onChange={(e) => setShippingCode(e.target.value)}
+            placeholder="Masukkan nomor resi pengiriman"
+            required
+          />
+          <div className="flex gap-2 justify-end">
+            <Button
+              type="button"
+              className="border-2 border-red-600 bg-white text-red-800 outline-none hover:bg-red-600 hover:text-white"
+              onClick={() => setShowShippingForm(false)}
+            >
+              Batal
+            </Button>
+            <Button className="bg-custom-gradient-tr" type="submit">
+              Submit
+            </Button>
+          </div>
+        </form>
+      )}
+      <BuyProductDialog
+        open={isBuyProductDialogOpen}
+        onOpenChange={setBuyProductDialogOpen}
+        productInfo={buyProductInfo}
+        isLoading={loadingAction}
+        selectedMethod={selectedPaymentMethod}
+        onSelectMethod={setSelectedPaymentMethod}
+        onSubmit={handleSubmitBuyProduct}
+      />
     </div>
-  )
+  );
 }

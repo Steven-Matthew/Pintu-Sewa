@@ -8,7 +8,7 @@ const ProductPage = () => {
   return (
     <>
       <Navbar type='product' />
-        <ProductBody />
+      <ProductBody />
       <Footer />
     </>
   )

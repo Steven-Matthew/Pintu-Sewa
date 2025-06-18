@@ -1,43 +1,44 @@
 "use client"
 
 import Image from "next/image"
-import { useState, useEffect } from "react"
 import Link from "next/link"
 import PintuSewaSeller from "@/public/pintuSewaSeler.png"
-
-interface ShopInformation {
-  shopName: string | null
-  shopImage: string | null
-}
+import { useState, useEffect } from "react"
 
 const NavigationBarSeller: React.FC = () => {
-  const [shopInformation, setShopInformation] = useState<ShopInformation>({
-    shopName: null,
-    shopImage: null,
-  })
+  const defaultImage = "https://res.cloudinary.com/dtizgexle/image/upload/v1749995104/logoTOko_fshgim.jpg"
 
-  const getLocalStorageItem = (key: string): string | null => {
-    if (typeof window !== "undefined" && window.localStorage) {
-      try {
-        return localStorage.getItem(key)
-      } catch (error) {
-        console.error(`Error accessing localStorage for key ${key}:`, error)
-        return null
-      }
-    }
-    return null
-  }
+  const [shopName, setShopName] = useState("Shop Name")
+  const [shopImage, setShopImage] = useState(defaultImage)
+  const [isMounted, setIsMounted] = useState(false)
 
   useEffect(() => {
-    setShopInformation({
-      shopName: getLocalStorageItem("shopName"),
-      shopImage: getLocalStorageItem("shopImage"),
-    })
+    const name = localStorage.getItem("shopName")
+    const image = localStorage.getItem("shopImage")
+
+    if (name) setShopName(name)
+    if (image) setShopImage(image)
+    setIsMounted(true)
   }, [])
 
-  // Default fallback values
-  const shopName = shopInformation.shopName || "Shop Name"
-  const shopImage = shopInformation.shopImage || "/default-shop-image.png"
+  if (!isMounted) {
+    // ✅ Skeleton Loading
+    return (
+      <div className='sticky top-0 z-50 w-full bg-white border-b border-gray-200'>
+        <div className='h-[24px] bg-color-primaryDark w-full'></div>
+        <div className='flex h-24 items-center justify-between px-4 md:px-10 animate-pulse'>
+          <div className='ml-8 w-[150px] h-[50px] bg-gray-200 rounded'></div>
+          <div className='flex items-center gap-4'>
+            <div className='hidden md:block text-right'>
+              <div className='w-[80px] h-[14px] bg-gray-200 rounded mb-1'></div>
+            </div>
+            <div className='w-[50px] h-[50px] rounded-full bg-gray-200'></div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className='sticky top-0 z-50 w-full bg-white border-b border-gray-200'>
       <div className='h-[24px] bg-color-primaryDark w-full'></div>
@@ -73,7 +74,7 @@ const NavigationBarSeller: React.FC = () => {
                 />
               ) : (
                 <div className='w-[50px] h-[50px] rounded-full bg-gray-300 flex items-center justify-center'>
-                  <span className='text-gray-600 text-sm font-medium'>{shopName.charAt(0).toUpperCase()}</span>
+                  <span className='text-gray-600 text-sm font-medium'>{shopName}</span>
                 </div>
               )}
             </div>

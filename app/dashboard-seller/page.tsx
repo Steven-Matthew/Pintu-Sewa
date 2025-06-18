@@ -53,26 +53,35 @@ const WalletSeller = () => {
     dashboard: true,
     wallet: true,
   })
-  const [error, setError] = useState<string | null>(null)
+
   const [alertState, setAlertState] = useState<AlertProps>({
     isOpen: false,
     message: "",
     isWrong: true,
   })
+  const defaultImage = "https://res.cloudinary.com/dtizgexle/image/upload/v1749995104/logoTOko_fshgim.jpg"
 
   const fetchShopId = async () => {
     try {
       const response = await axios.get(`${shopBaseUrl}/get-shop/${customerId}`)
       if (response.data.error_schema.error_code === "PS-00-000") {
+        const name = response.data.output_schema.shop_name
+        const image = response.data.output_schema.shop_image
         localStorage.setItem("shopId", response.data.output_schema.shop_id)
-        localStorage.setItem("shopName", response.data.output_schema.shop_name)
-        localStorage.setItem("shopImage", response.data.output_schema.shop_image)
+        localStorage.setItem("shopName", name)
+        localStorage.setItem("shopImage", image ? image : defaultImage)
         setShopId(response.data.output_schema.shop_id)
       } else if (response.data.error_schema.error_code === "PS-00-002") {
         router.push("/create-shop")
       }
     } catch (err: any) {
-      console.log("Error access dahsboard seller", err)
+      setAlertState({
+        isOpen: true,
+        message: "Terjadi kesalahan!",
+        onClose: () => {
+          router.push("/dashboard")
+        },
+      })
     }
   }
 
@@ -87,12 +96,13 @@ const WalletSeller = () => {
       setWalletHistory(wallet)
       setLoading({ dashboard: false, wallet: false })
     } catch (err) {
-      console.error("Error fetching data:", err)
-      setError(err instanceof Error ? err.message : "Failed to fetch data")
       setLoading({ dashboard: false, wallet: false })
       setAlertState({
         isOpen: true,
-        message: err instanceof Error ? err.message : "Failed to fetch data",
+        message: "Terjadi kesalahan!",
+        onClose: () => {
+          router.push("/dashboard")
+        },
       })
     }
   }
@@ -105,21 +115,16 @@ const WalletSeller = () => {
     }
   }, [shopId])
 
-  if (error) {
-    return (
-      <SellerLayout>
-        <div className='p-4 text-red-500'>{error}</div>
-      </SellerLayout>
-    )
-  }
-
   return (
     <SellerLayout>
       {alertState.isOpen && (
         <Alert
           message={alertState.message}
           isOpen={alertState.isOpen}
-          onClose={() => setAlertState({ isOpen: false, message: "" })}
+          onClose={() => {
+            setAlertState({ ...alertState, isOpen: false })
+            if (alertState.onClose) alertState.onClose()
+          }}
           isWrong={alertState.isWrong}
         />
       )}

@@ -449,4 +449,4 @@ const RentForm = ({ productDetail }: { productDetail: ProductDetailProps }) => {
   );
 };
 
-export default RentForm;
+export default RentForm;
